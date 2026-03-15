@@ -1,0 +1,42 @@
+{
+	"manifest_version": 2,
+	"name": "Image Embiggener",
+	"version": "1.0",
+	"description": "View all images on a webpage in a gallery view",
+	"icons": {
+		"48": "icon-48.png"
+	},
+	"permissions": [
+		"tabs",
+		"storage",
+		"downloads",
+		"downloads.open",
+		"<all_urls>"
+	],
+	"background": {
+		"scripts": [
+			"background.js"
+		]
+	},
+	"content_scripts": [{
+		"matches": ["http://*/*", "https://*/*"],
+		"js": ["content.js"],
+		"run_at": "document_start"
+	}],
+	"browser_action": {
+		"default_title": "Image Embiggener",
+		"default_icon": "icon-48.png"
+	},
+	"browser_specific_settings": {
+		"gecko": {
+			"id": "image-embiggener@git-amer"
+		}
+	},
+	"options_ui": {
+		"page": "options.html",
+		"open_in_tab": true
+	},
+	"web_accessible_resources": [
+		"content.css"
+	]
+}

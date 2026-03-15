@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<title>Image Embiggener Options</title>
+	<link rel="stylesheet" href="content.css">
+</head>
+
+<body id="OptionsPage">
+	<h1>Image Embiggener Options</h1>
+
+	<div class="container">
+		<div id="OptionsHeader" class="ig-controls">
+			<span>Saved Profiles</span>
+			<div class="options-header-actions">
+				<button id="sort-profiles-btn" title="Toggle sort order">Sorting by Index</button>
+				<button id="add-profile-btn" title="Add New Empty Profile">Add New Profile</button>
+			</div>
+		</div>
+		<div class="options-table">
+			<div class="options-table-header">
+				<div>Name</div>
+				<div>URL Regex</div>
+				<div>Cols</div>
+				<div>Rows</div>
+				<div>Min px</div>
+				<div>Sort</div>
+				<div>Derive</div>
+				<div>Include</div>
+				<div>Exclude</div>
+				<div>Action</div>
+			</div>
+			<div id="default-settings-form" class="ig-controls profile-row default-profile options-table-row">
+				<div class="ig-profile-controls" readonly>
+					<input type="text" class="profile-name disabled" value="Default" readonly>
+					<input type="text" class="url-regex disabled" readonly>
+				</div>
+				<div class="options-split-cell">
+					<input type="number" id="default-gridCols" class="grid-cols">
+				</div>
+				<div class="options-split-cell">
+					<input type="number" id="default-gridRows" class="grid-rows">
+				</div>
+				<div class="options-split-cell">
+					<input type="number" id="default-minSize" class="min-size">
+				</div>
+				<div class="options-split-cell">
+					<select id="default-sortBy">
+						<option value="dom">Original</option>
+						<option value="path">Path</option>
+						<option value="filename">File Name</option>
+						<option value="pixels">Pixels</option>
+					</select>
+				</div>
+				<div class="options-split-cell ig-options-derive">
+					<input type="checkbox" id="default-deriveOriginals">
+				</div>
+				<div class="options-split-cell">
+					<input type="text" class="include-regex disabled" readonly>
+				</div>
+				<div class="options-split-cell">
+					<input type="text" class="exclude-regex disabled" readonly>
+				</div>
+				<div class="options-row-action">
+					<button class="disabled" disabled readonly>&#x2715;</button>
+				</div>
+			</div>
+			<div id="profiles-list" class="profiles-container">
+				<!-- Profiles will be dynamically added here -->
+			</div>
+		</div>
+		<p class="help-text">
+			<a href="https://regex101.com/" target="_blank" rel="noopener noreferrer">Regex</a> is used for URL, Include, and Exclude.
+		</p>
+	</div>
+
+	<script src="options.js"></script>
+</body>
+
+</html>
