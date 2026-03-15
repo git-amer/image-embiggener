@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-03-15
+
+- Fixed log-view edge scrolling and visual artifacts by locking page scroll while the overlay is open, adding page-level hide/scroll-lock styles from `content.js`, and capturing log wheel input so scroll events no longer leak to the underlying site.
+- Added invalid regex handling in gallery filters: bad include/exclude patterns are now treated as disabled filters and the corresponding input is highlighted with an error tooltip instead of logging warning spam.
+- Expanded single-image popup hotkeys: number keys `0-9` (main row or numpad) jump to `0%-90%` of the gallery, `Shift+Left/Right` jumps by one tenth, and `Up/Down` jumps to first/last image.
+- Improved URL normalization for local and non-origin schemes by canonicalizing Windows drive paths (`D:/...`, `D:\\...`) to `file:///...` and by preserving `file://` / `ftp://` path metadata without `null/...` prefixes.
+- Updated background message handling so badge/options actions are fire-and-forget, reducing Firefox `Promised response from onMessage listener went out of scope` noise.
+
 ## 2026-03-14
 
 - Removed the duplicate in-gallery options editor, changed the gallery `Options` button to open the standalone `options.html` tab via `browser.runtime.openOptionsPage()`, and updated project docs to treat that standalone page as the single options surface.

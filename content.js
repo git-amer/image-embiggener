@@ -28,6 +28,7 @@ if (!window.hasRunImageGallery) {
 	let activeSaveError = '';
 	let saveInputAutofillArmed = false;
 	const originalGuessCache = new Map();
+	const PAGE_LOCK_STYLE_ID = 'ig-page-lock-style';
 
 	// --- Persistent Session Settings ---
 	let settings = {
@@ -84,6 +85,61 @@ if (!window.hasRunImageGallery) {
 			.replace(/'/g, '&#039;');
 	}
 
+	function ensurePageOverlayStyles() {
+		if (document.getElementById(PAGE_LOCK_STYLE_ID)) return;
+
+		const style = document.createElement('style');
+		style.id = PAGE_LOCK_STYLE_ID;
+		style.textContent = `
+			.amer-image-gallery-hide {
+				display: none !important;
+			}
+			html.amer-image-gallery-scroll-lock,
+			body.amer-image-gallery-scroll-lock {
+				overflow: hidden !important;
+				overscroll-behavior: none !important;
+			}
+		`;
+		(document.head || document.documentElement).appendChild(style);
+	}
+
+	function setPageScrollLock(isLocked) {
+		document.documentElement.classList.toggle('amer-image-gallery-scroll-lock', Boolean(isLocked));
+		document.body?.classList.toggle('amer-image-gallery-scroll-lock', Boolean(isLocked));
+	}
+
+	function getUrlBasePrefix(urlObj) {
+		if (!urlObj) return '';
+		if (urlObj.origin && urlObj.origin !== 'null') return urlObj.origin;
+		return `${urlObj.protocol}//${urlObj.host || ''}`;
+	}
+
+	function getUrlDirectoryBase(urlObj, directoryPath = '') {
+		return `${getUrlBasePrefix(urlObj)}${directoryPath}`;
+	}
+
+	function resolveCandidateUrl(urlText, baseHref) {
+		const raw = String(urlText || '').trim();
+		if (!raw) {
+			throw new Error('URL is empty');
+		}
+
+		// Local files often appear as "D:/..." or "D:\\..." in file:// pages.
+		if (/^[a-zA-Z]:[\\/]/.test(raw)) {
+			const normalizedPath = raw.replace(/\\/g, '/').replace(/^\/+/, '');
+			return new URL(`file:///${normalizedPath}`).href;
+		}
+
+		const absoluteUrl = new URL(raw, baseHref).href;
+		const driveLikeUrlMatch = absoluteUrl.match(/^([a-zA-Z]):\/(.*)$/);
+		if (driveLikeUrlMatch) {
+			const drive = driveLikeUrlMatch[1].toUpperCase();
+			return new URL(`file:///${drive}:/${driveLikeUrlMatch[2]}`).href;
+		}
+
+		return absoluteUrl;
+	}
+
 	function deriveFilenameParts(url) {
 		if (String(url).startsWith('data:')) {
 			return { path: 'data:', filename: 'image.png', basename: 'image', extension: 'png' };
@@ -98,9 +154,10 @@ if (!window.hasRunImageGallery) {
 			const extensionMatch = decodedFilename.match(/\.([a-z0-9]{1,8})$/i);
 			const extension = extensionMatch ? extensionMatch[1].toLowerCase() : '';
 			const basename = extension ? decodedFilename.slice(0, -(extension.length + 1)) : decodedFilename;
+			const directoryPath = pathname.substring(0, Math.max(0, lastSlashIndex + 1));
 
 			return {
-				path: `${urlObj.origin}${pathname.substring(0, Math.max(0, lastSlashIndex + 1))}`,
+				path: getUrlDirectoryBase(urlObj, directoryPath),
 				filename: decodedFilename,
 				basename: basename || decodedFilename || 'image',
 				extension
@@ -265,7 +322,7 @@ if (!window.hasRunImageGallery) {
 			try {
 				// The new URL() constructor correctly handles relative, absolute,
 				// and protocol-relative ("//...") URLs when a base is provided.
-				const absoluteUrl = new URL(trimmedUrl, window.location.href).href;
+					const absoluteUrl = resolveCandidateUrl(trimmedUrl, window.location.href);
 				const cleanUrl = absoluteUrl.split('#')[0]; // Remove fragment
 				if (urlMap.has(cleanUrl)) {
 					if (DEBUG) {
@@ -535,15 +592,17 @@ if (!window.hasRunImageGallery) {
 			const extension = derived.extension || '';
 			if (!extension) return null;
 			const directory = urlObj.pathname.substring(0, urlObj.pathname.lastIndexOf('/') + 1);
+			const directoryBase = getUrlDirectoryBase(urlObj, directory);
 
 			for (const rule of ORIGINAL_FILENAME_RULES) {
 				const match = rule.match(derived.basename || '');
 				if (!match) continue;
 				return {
-					cacheKey: `${urlObj.origin}${directory}::${rule.id}::${String(match[1] || '').toLowerCase()}::${extension.toLowerCase()}`,
+					cacheKey: `${directoryBase}::${rule.id}::${String(match[1] || '').toLowerCase()}::${extension.toLowerCase()}`,
 					urlObj,
 					derived,
 					directory,
+					directoryBase,
 					candidates: rule.buildCandidates(match, extension)
 				};
 			}
@@ -561,7 +620,7 @@ if (!window.hasRunImageGallery) {
 		const cached = originalGuessCache.get(plan.cacheKey);
 		if (cached) {
 			if (cached.status === 'resolved' && cached.relativeFilename) {
-				const resolvedUrl = new URL(cached.relativeFilename, `${plan.urlObj.origin}${plan.directory}`).href;
+				const resolvedUrl = new URL(cached.relativeFilename, plan.directoryBase).href;
 				return {
 					url: resolvedUrl,
 					cacheKey: plan.cacheKey,
@@ -573,7 +632,7 @@ if (!window.hasRunImageGallery) {
 
 		for (const candidateFilename of plan.candidates) {
 			try {
-				const candidateUrl = new URL(candidateFilename, `${plan.urlObj.origin}${plan.directory}`).href;
+				const candidateUrl = new URL(candidateFilename, plan.directoryBase).href;
 				const response = await fetch(candidateUrl, { method: 'HEAD', cache: 'force-cache' });
 				const contentType = response.headers.get('content-type') || '';
 				if (response.ok && contentType.startsWith('image/')) {
@@ -710,12 +769,14 @@ if (!window.hasRunImageGallery) {
 	function compileFilterRegexes() {
 		let includeRegex = null;
 		let excludeRegex = null;
+		let includeError = '';
+		let excludeError = '';
 
 		if (settings.includeRegex) {
 			try {
 				includeRegex = new RegExp(settings.includeRegex, 'i');
 			} catch (error) {
-				console.warn('Invalid include regex', error);
+				includeError = error instanceof Error ? error.message : String(error);
 			}
 		}
 
@@ -723,11 +784,11 @@ if (!window.hasRunImageGallery) {
 			try {
 				excludeRegex = new RegExp(settings.excludeRegex, 'i');
 			} catch (error) {
-				console.warn('Invalid exclude regex', error);
+				excludeError = error instanceof Error ? error.message : String(error);
 			}
 		}
 
-		return { includeRegex, excludeRegex };
+		return { includeRegex, excludeRegex, includeError, excludeError };
 	}
 
 	function getFilterReasons(record, compiledRegexes) {
@@ -1674,14 +1735,36 @@ if (!window.hasRunImageGallery) {
 
 		popup.addEventListener('keydown', (e) => {
 			const totalImages = allImageData.length;
-			const jumpAmount = Math.max(1, Math.floor(totalImages / 10));
+			const jumpAmount = Math.max(1, Math.ceil(totalImages / 10));
+			const navigateToPercent = (digit) => {
+				if (totalImages <= 0) return;
+				const normalizedDigit = Math.max(0, Math.min(9, digit));
+				const percent = normalizedDigit / 10;
+				const targetIndex = normalizedDigit === 0
+					? 0
+					: Math.min(totalImages - 1, Math.max(0, Math.ceil(totalImages * percent) - 1));
+				navigateTo(targetIndex);
+			};
+
+			const digitCodeMatch = String(e.code || '').match(/^(?:Digit|Numpad)(\d)$/);
+			if (digitCodeMatch) {
+				e.preventDefault();
+				navigateToPercent(parseInt(digitCodeMatch[1], 10));
+				return;
+			}
 
 			if (e.key === 'ArrowRight') {
 				e.preventDefault();
-				navigateTo(currentPopupIndex + 1);
+				navigateTo(currentPopupIndex + (e.shiftKey ? jumpAmount : 1));
 			} else if (e.key === 'ArrowLeft') {
 				e.preventDefault();
-				navigateTo(currentPopupIndex - 1);
+				navigateTo(currentPopupIndex - (e.shiftKey ? jumpAmount : 1));
+			} else if (e.key === 'ArrowUp') {
+				e.preventDefault();
+				navigateTo(0);
+			} else if (e.key === 'ArrowDown') {
+				e.preventDefault();
+				navigateTo(totalImages - 1);
 			} else if (e.key === 'Home') {
 				e.preventDefault();
 				navigateTo(0);
@@ -1771,6 +1854,8 @@ if (!window.hasRunImageGallery) {
 			popup.classList.remove('ig-popup-chrome-hidden');
 		});
 
+		ensurePageOverlayStyles();
+		setPageScrollLock(true);
 		document.querySelectorAll('body > *').forEach(item => {
 			item.classList.add('amer-image-gallery-hide');
 		});
@@ -1862,6 +1947,19 @@ if (!window.hasRunImageGallery) {
 			settings.excludeRegex = shadow.getElementById('excludeRegex').value;
 			settings.sortBy = shadow.getElementById('sortBy').value;
 			settings.deriveOriginals = shadow.getElementById('deriveBtn').classList.contains('ig-toggle-active');
+
+			const compiledRegexes = compileFilterRegexes();
+			const includeRegexInput = shadow.getElementById('includeRegex');
+			const excludeRegexInput = shadow.getElementById('excludeRegex');
+			if (includeRegexInput) {
+				includeRegexInput.classList.toggle('ig-invalid-regex', Boolean(compiledRegexes.includeError));
+				includeRegexInput.title = compiledRegexes.includeError ? `Invalid regex: ${compiledRegexes.includeError}` : '';
+			}
+			if (excludeRegexInput) {
+				excludeRegexInput.classList.toggle('ig-invalid-regex', Boolean(compiledRegexes.excludeError));
+				excludeRegexInput.title = compiledRegexes.excludeError ? `Invalid regex: ${compiledRegexes.excludeError}` : '';
+			}
+
 			filterAndDisplayImages(allScrapedUrls, gridContainer);
 		};
 
@@ -1946,6 +2044,14 @@ if (!window.hasRunImageGallery) {
 			setLogHighlightState({ type, value, sourceKey });
 		});
 
+		const logView = shadow.getElementById('ig-log-view');
+		logView.addEventListener('wheel', (e) => {
+			if (currentViewMode !== 'log') return;
+			e.preventDefault();
+			logView.scrollTop += e.deltaY;
+			logView.scrollLeft += e.deltaX;
+		}, { passive: false });
+
 		// --- New, Self-Contained Scroll Wheel Functionality ---
 		const controlsContainer = shadow.querySelector('.ig-controls');
 		controlsContainer.addEventListener('wheel', (e) => {
@@ -1986,6 +2092,21 @@ if (!window.hasRunImageGallery) {
 					target.selectedIndex = newIndex;
 					target.dispatchEvent(new Event('input', { bubbles: true }));
 				}
+			}
+		}, { passive: false });
+
+		galleryHost.addEventListener('wheel', (e) => {
+			if (popup && popup.style.display === 'flex') return;
+			if (currentViewMode !== 'log') return;
+
+			const controlsEl = shadow.querySelector('.ig-controls');
+			const saveDialogBackdrop = shadow.getElementById('ig-save-dialog-backdrop');
+			const inLogView = logView.contains(e.target);
+			const inControls = controlsEl ? controlsEl.contains(e.target) : false;
+			const inOpenSaveDialog = isSaveDialogOpen() && saveDialogBackdrop && saveDialogBackdrop.contains(e.target);
+
+			if (!inLogView && !inControls && !inOpenSaveDialog) {
+				e.preventDefault();
 			}
 		}, { passive: false });
 
@@ -2223,6 +2344,7 @@ if (!window.hasRunImageGallery) {
 		// Initial grid style setup
 		updateGridStyle();
 		updateSaveDialogState();
+		updateGridFilter();
 		renderLogTable();
 		setMainViewMode('gallery');
 		syncHeaderToggleState();
@@ -2247,6 +2369,8 @@ if (!window.hasRunImageGallery) {
 			const gridContainer = galleryHost.shadowRoot.querySelector('.ig-grid-container');
 			await filterAndDisplayImages(allScrapedUrls, gridContainer);
 			galleryHost.style.display = 'block';
+			ensurePageOverlayStyles();
+			setPageScrollLock(true);
 			// Ensure other page content is hidden
 			document.querySelectorAll('body > *').forEach(item => { if (item.id !== GALLERY_HOST_ID) item.classList.add('amer-image-gallery-hide'); });
 			window.addEventListener('keydown', handleGlobalKeyDown);
@@ -2281,6 +2405,7 @@ if (!window.hasRunImageGallery) {
 				item.classList.remove('amer-image-gallery-hide');
 			});
 		}
+		setPageScrollLock(false);
 		if (window.igSessionInitialized) {
 			setupPageObserver();
 		}
@@ -2454,8 +2579,9 @@ if (!window.hasRunImageGallery) {
 	// Listen for toggle message from background.js
 	browser.runtime.onMessage.addListener((msg) => {
 		if (msg?.action === 'toggleGallery') {
-			toggleGallery();
+			return toggleGallery();
 		}
+		return false;
 	});
 
 	// --- Initial call when the script is first injected ---

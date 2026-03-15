@@ -8,6 +8,7 @@
 	font-family: "Source Sans 3", sans-serif;
 	height: 100vh;
 	left: 0;
+	overscroll-behavior: none;
 	position: fixed;
 	top: 0;
 	width: 100vw;
@@ -79,6 +80,7 @@ button:disabled {
 	display: flex;
 	flex-direction: column;
 	height: 100%;
+	overscroll-behavior: contain;
 	width: 100%;
 }
 
@@ -229,7 +231,14 @@ button:hover {
 	display: none;
 	flex: 1 1 auto;
 	margin: 20px;
+	overscroll-behavior: contain;
 	overflow: auto;
+}
+
+.ig-controls input.ig-invalid-regex {
+	background: #552222;
+	border: 1px solid #e78787;
+	color: #ffe5e5;
 }
 
 #ig-log-view table {

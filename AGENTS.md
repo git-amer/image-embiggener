@@ -2,7 +2,7 @@ This file is the extension design reference. Update it whenever functionality, b
 
 ## Extension Shape
 
-- `background.js` is the browser-action, badge, save-collision, download, and standalone-options-page coordinator.
+- `background.js` is the browser-action, badge, save-collision, download, and standalone-options-page coordinator. Badge/options message actions are fire-and-forget; save/collision actions return async responses to content scripts.
 - `content.js` owns almost all runtime behavior on web pages: image scraping, progressive processing, gallery creation, filtering, popup viewing, saving, per-page logging, session settings, and badge updates.
 - `content.css` styles both the page overlay gallery and the standalone `options.html` page because the options UI reuses extension classes.
 - `options.html` and `options.js` are the single profile/default-settings editor, opened as the extension options page.
@@ -12,7 +12,8 @@ This file is the extension design reference. Update it whenever functionality, b
 
 - Clicking the toolbar icon sends `toggleGallery` from `background.js` to the content script in the active tab.
 - The content script creates one shadow-DOM host per page (`#image-gallery-extension-host`) and reuses it for reopen cycles.
-- Page content outside the overlay is hidden with the `amer-image-gallery-hide` class while the gallery is open.
+- Page content outside the overlay is hidden with the `amer-image-gallery-hide` class while the gallery is open; that class is injected into page-level CSS by `content.js` so it applies outside shadow DOM.
+- While the overlay is open, `content.js` applies `amer-image-gallery-scroll-lock` on `html/body` to prevent background page scrolling and scroll-chaining artifacts.
 - Session state lives in the content script until the tab reloads. This includes current filter settings, removed images, processed image metadata, current profile selection, whether the log panel is active, save-dialog visibility, and whether the header profile save button is dirty.
 - Persistent settings live in `browser.storage.sync` as:
   - `defaultProfile`
@@ -28,6 +29,8 @@ This file is the extension design reference. Update it whenever functionality, b
   - inline `background-image` URLs
   - same-origin iframes recursively
 - Relative and protocol-relative URLs are normalized with `new URL(..., window.location.href)`.
+- Windows drive-path URLs like `D:/...` or `D:\...` discovered on `file://` pages are normalized to canonical `file:///D:/...` URLs before processing.
+- Discovery and record parsing now preserve non-origin protocols (`file://`, `ftp://`) without forcing a `null/...` path prefix in log/path metadata.
 - URL fragments are removed.
 - Duplicate URLs are deduplicated before processing, but same-content images with different URLs are only detected later by hashing.
 
@@ -96,8 +99,8 @@ This file is the extension design reference. Update it whenever functionality, b
 
 - A gallery image must satisfy all of the following:
   - not manually removed
-  - passes include regex, if set
-  - does not match exclude regex, if set
+  - passes include regex, if set and valid
+  - does not match exclude regex, if set and valid
   - width is at least `minWidth`
   - height is at least `minHeight`
   - is not filtered by `bigger exists` because a larger derived or page-discovered variant passes the other gallery filters
@@ -111,6 +114,7 @@ This file is the extension design reference. Update it whenever functionality, b
   - `bigger exists`
   - `duplicate`
 - Images with fetch/decode failures are excluded from the gallery, but they are shown in the log with an `error` status rather than a filter reason.
+- Invalid include/exclude regex patterns are treated as disabled filters, and the corresponding header input is highlighted in red with an `Invalid regex: ...` tooltip instead of logging console warnings.
 
 ## Manual Removal
 
@@ -151,6 +155,7 @@ This file is the extension design reference. Update it whenever functionality, b
 - Pressing Escape in log view returns to the gallery instead of closing the whole overlay.
 - The log table shows every processed page record plus every processed derived record created from filename probing.
 - The log panel has a 20px outer margin.
+- Wheel scrolling in log mode is captured by the log panel (including margins around the table) and no longer chains through to the underlying web page.
 - Columns:
   - 1-based index of every processed record in the current gallery sort order, including filtered rows
   - path excluding filename
@@ -176,8 +181,11 @@ This file is the extension design reference. Update it whenever functionality, b
   - click left/right nav zones
   - scroll while hovering nav zones
   - Left / Right arrows
+  - Shift+Left / Shift+Right jump backward/forward by one tenth of the gallery
+  - Up / Down arrows jump to first/last image
   - Home / End
   - Page Up / Page Down
+  - Number keys `0-9` (main row or numpad) jump to `0%-90%` positions in the current gallery list
 - Popup zoom and transform controls:
   - wheel zooms
   - middle click toggles fit/original zoom

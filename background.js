@@ -124,22 +124,37 @@ async function saveImages(message) {
 }
 
 browser.runtime.onMessage.addListener((message, sender) => {
+	if (!message || typeof message !== 'object') {
+		return false;
+	}
+
 	if (message.action === 'openOptionsPage') {
-		return browser.runtime.openOptionsPage();
+		browser.runtime.openOptionsPage().catch((error) => {
+			console.error('Failed to open options page:', error);
+		});
+		return false;
 	}
 
 	if (message.action === 'updateBadge') {
-		return browser.browserAction.setBadgeText({
+		if (!sender?.tab?.id) return false;
+		browser.browserAction.setBadgeText({
 			text: message.count.toString(),
 			tabId: sender.tab.id
+		}).catch((error) => {
+			console.error('Failed to update badge text:', error);
 		});
+		return false;
 	}
 
 	if (message.action === 'clearBadge') {
-		return browser.browserAction.setBadgeText({
+		if (!sender?.tab?.id) return false;
+		browser.browserAction.setBadgeText({
 			text: '',
 			tabId: sender.tab.id
+		}).catch((error) => {
+			console.error('Failed to clear badge text:', error);
 		});
+		return false;
 	}
 
 	if (message.action === 'saveImages') {
@@ -150,5 +165,5 @@ browser.runtime.onMessage.addListener((message, sender) => {
 		return checkSaveCollisions(message);
 	}
 
-	return undefined;
+	return false;
 });
