@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-03-16
+
+- Reworked manual visibility controls: removed the top-bar `Unhide` button, renamed the manual hide reason to `hidden`, and added per-row `Hidden` toggles in log view that can force-hide or force-show records (including filtered ones).
+- Expanded log view with a thumbnail column, thumbnail-to-popup opening, temporary force-show behavior for hidden rows opened from log, centered filter cells, stronger `error` styling (`#f00` on `hsl(40, 10%, 90%)`), and hover effects for clickable log cells/headers.
+- Added gallery hotkeys `l` (log), `o` (options), `s` (save dialog), and `d` (derive), plus underlined button hotkey letters in `Derive`, `Save Images`, `Log`, and `Options`.
+- Updated close behavior so closing the gallery also resets log/save panel state.
+- Enhanced the save dialog list to show live `old -> new` filename mappings when custom text is entered, and to live-highlight planned filename collisions (including destination collisions from background download-history checks) in red before save.
+- Updated `AGENTS.md` and `README.md` to reflect the new log visibility model, hotkeys, save preview behavior, and UI details.
+
 ## 2026-03-15
 
 - Fixed log-view edge scrolling and visual artifacts by locking page scroll while the overlay is open, adding page-level hide/scroll-lock styles from `content.js`, and capturing log wheel input so scroll events no longer leak to the underlying site.

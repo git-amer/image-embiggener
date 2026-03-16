@@ -14,7 +14,7 @@ This file is the extension design reference. Update it whenever functionality, b
 - The content script creates one shadow-DOM host per page (`#image-gallery-extension-host`) and reuses it for reopen cycles.
 - Page content outside the overlay is hidden with the `amer-image-gallery-hide` class while the gallery is open; that class is injected into page-level CSS by `content.js` so it applies outside shadow DOM.
 - While the overlay is open, `content.js` applies `amer-image-gallery-scroll-lock` on `html/body` to prevent background page scrolling and scroll-chaining artifacts.
-- Session state lives in the content script until the tab reloads. This includes current filter settings, removed images, processed image metadata, current profile selection, whether the log panel is active, save-dialog visibility, and whether the header profile save button is dirty.
+- Session state lives in the content script until the tab reloads. This includes current filter settings, manual visibility overrides, processed image metadata, current profile selection, whether the log panel is active, save-dialog visibility, and whether the header profile save button is dirty.
 - Persistent settings live in `browser.storage.sync` as:
   - `defaultProfile`
   - `profiles`
@@ -75,16 +75,16 @@ This file is the extension design reference. Update it whenever functionality, b
   - include regex
   - exclude regex
   - `Derive`
-  - `Unhide`
   - `Save Images`
   - `Log`
   - `Options`
   - close button
-- The action buttons stay in this order: `Derive`, `Unhide`, `Save Images`, `Log`, `Options`, close.
+- The action buttons stay in this order: `Derive`, `Save Images`, `Log`, `Options`, close.
 - `Derive` is a sticky toggle button that defaults on and controls whether filename-based larger-file probing is attempted. Its title text is `Attempt to discover larger files based on filename.`
+- The `D` / `S` / `L` / `O` letters are underlined in `Derive`, `Save Images`, `Log`, and `Options` to indicate hotkeys.
 - `Save Images` and `Log` are toggle buttons and invert colors while their dialog/panel is open.
 - `Options` opens the standalone extension options page (`options.html`) in a browser tab through `background.js`.
-- The grid is rendered from `allImageData`, which is the currently visible gallery subset after filtering, removal, and duplicate collapse.
+- The grid is rendered from `allImageData`, which is the currently visible gallery subset after filtering, manual hide/show overrides, and duplicate handling.
 - Gallery sorting supports:
   - original DOM order
   - path
@@ -92,13 +92,18 @@ This file is the extension design reference. Update it whenever functionality, b
   - pixel count descending
 - Mouse wheel scrolling in the grid advances by rows instead of native pixel scrolling.
 - Arrow Up / Down and Page Up / Down also move by rows while the gallery is focused.
+- Hotkeys while the gallery is open (outside text-edit fields and popup focus) are:
+  - `l` toggle log view
+  - `o` open options page
+  - `s` toggle save-images dialog
+  - `d` toggle `Derive`
 - Hovering an image shows an info overlay with dimensions, query parameters, a bold `#`-prefixed gallery index, path, filename, and duplicate count tooltip.
 - Hovering the controls bar forces all image info overlays open for easier scanning.
 
 ## Filtering Rules
 
 - A gallery image must satisfy all of the following:
-  - not manually removed
+  - not manually hidden (unless explicitly forced visible from the log Hidden toggle)
   - passes include regex, if set and valid
   - does not match exclude regex, if set and valid
   - width is at least `minWidth`
@@ -106,7 +111,7 @@ This file is the extension design reference. Update it whenever functionality, b
   - is not filtered by `bigger exists` because a larger derived or page-discovered variant passes the other gallery filters
   - is not a same-content duplicate of an earlier gallery-eligible image
 - Filter reasons used by the log view are:
-  - `removed`
+  - `hidden`
   - `include`
   - `exclude`
   - `width`
@@ -116,12 +121,13 @@ This file is the extension design reference. Update it whenever functionality, b
 - Images with fetch/decode failures are excluded from the gallery, but they are shown in the log with an `error` status rather than a filter reason.
 - Invalid include/exclude regex patterns are treated as disabled filters, and the corresponding header input is highlighted in red with an `Invalid regex: ...` tooltip instead of logging console warnings.
 
-## Manual Removal
+## Manual Visibility
 
-- Pressing Backspace while hovering a gallery tile removes that image from the current gallery session.
-- Removed images are tracked by discovered source URL in `removedImageUrls`.
-- `Unhide` clears that set and rebuilds the gallery from the already processed records.
-- Removal only lasts until the page reloads.
+- Pressing Backspace while hovering a gallery tile sets that record to manual hidden for the current session.
+- Manual per-record visibility overrides are tracked in-memory in `manualVisibilityOverrides` and reset on page reload.
+- Log rows include a `Hidden` toggle (`X`): black when shown, red when hidden.
+- Hidden state is initially derived from filters, but the toggle can force-show a filtered image or force-hide an otherwise visible image.
+- When a row is force-shown while it still has underlying filter reasons, the filter cell uses dark gray text on a gray background to indicate an override.
 
 ## Save Images
 
@@ -129,10 +135,10 @@ This file is the extension design reference. Update it whenever functionality, b
 - The dialog includes:
   - a filename textbox
   - buttons: `Save & View`, `Save & Explore`, `Save All`, `Cancel`
-  - a file list showing the original website filenames that would be used if the textbox is empty or ends with a path separator
+  - a file list showing original names, or `old → new` mappings while textbox input is non-empty
   - an error area under the list
 - The modal is `80vh` tall and `min(1500px, 90vw)` wide.
-- Save scope is exactly the current gallery contents in current gallery order. Filtered-out images, manually removed images, and same-content duplicates that are not visible in the gallery are not saved.
+- Save scope is exactly the current gallery contents in current gallery order. Filtered-out images, manually hidden images, and same-content duplicates that are not visible in the gallery are not saved.
 - Save naming rules:
   - textbox input is trimmed with `trim()`
   - if empty, save with original filenames
@@ -143,11 +149,12 @@ This file is the extension design reference. Update it whenever functionality, b
 - Saves go through `background.js` using `browser.downloads.download`.
 - All saved files are prefixed with `Image Embiggener/`, so downloads land inside that folder under Firefox’s configured download location.
 - `background.js` checks the planned `Image Embiggener/...` paths against existing download history before starting. If any target path collides, nothing is saved and the error area lists the conflicting relative paths.
+- While typing in the save textbox, the dialog live-checks planned destinations against download history and highlights colliding rows red before save.
 - `Save & Explore` calls `browser.downloads.show()` on the first saved file after downloads finish.
 - `Save & View` calls `browser.downloads.open()` on the first saved file after downloads finish.
 - Files are downloaded sequentially in current gallery order, so modified times stay aligned with gallery order.
 - The modal closes on success or cancel. It stays open and displays an error if saving fails.
-- Duplicate original filenames in the dialog list are highlighted red and disable the three save actions.
+- Duplicate original filenames, duplicate planned output names, and live-detected destination collisions are highlighted red and disable the three save actions.
 
 ## Log View
 
@@ -158,21 +165,27 @@ This file is the extension design reference. Update it whenever functionality, b
 - Wheel scrolling in log mode is captured by the log panel (including margins around the table) and no longer chains through to the underlying web page.
 - Columns:
   - 1-based index of every processed record in the current gallery sort order, including filtered rows
+  - tiny thumbnail preview (left of path)
   - path excluding filename
   - filename
   - file type
   - width
   - height
+  - `Hidden` toggle button
   - filter/status result
 - Filter column behavior:
   - green check mark when the image is currently in the gallery
   - light blue `derived` cell with a check mark when the record is a derived larger-file record that is in the gallery and that derived URL is not otherwise present on the page
+  - dark-gray-on-gray reason text when an image is force-shown by Hidden toggle despite filter reasons
   - pastel red cell with comma-separated reasons when it is not
-  - warm red `error` cell when the image could not be fetched or decoded
+  - `#f00` text on `hsl(40, 10%, 90%)` for `error` when the image could not be fetched or decoded
 - Clicking a column header toggles sorting for that column.
 - Clicking a `derived` filter cell underlines `derived` and highlights the originating filename cell in pastel yellow; clicking it again clears the highlight.
 - Clicking a `duplicate` filter cell highlights all filename cells in the same duplicate-hash group.
 - Clicking a path, filename, type, width, or height cell highlights matching cells in the same pastel yellow. Filename matching ignores file extensions.
+- Clicking a log thumbnail opens single-image view.
+- If the clicked row is currently hidden, the record is temporarily force-shown for popup viewing and restored to its prior hidden state when returning from popup to log.
+- Clickable log cells and sortable log headers use underline + glow hover effects (`text-shadow: 0 0 2px #f2f2546e`) with `0.15s ease` transitions.
 
 ## Single Image View
 
@@ -209,6 +222,7 @@ This file is the extension design reference. Update it whenever functionality, b
   - else close single-image popup
   - else if log view is open, return to gallery
   - else close the gallery overlay
+- Closing the gallery also closes both log view and save dialog state so reopen starts in gallery mode.
 
 ## Badge Behavior
 
@@ -253,16 +267,9 @@ This file is the extension design reference. Update it whenever functionality, b
 - The extension is still Manifest V2 and uses `browserAction`. Suggested fix: migrate to Manifest V3 / `action` before Firefox deprecations become a blocker.
 - The standalone options page still has its own separate implementation in `options.js`/`options.html` rather than sharing code with the in-page profile controls in `content.js`. Suggested fix: refactor both paths to share one renderer or storage/editing helper layer.
 - Exact closed-gallery badge counts now require background rescans to keep processing records, which is more accurate but still keeps the monolithic content-script architecture doing a lot of work on page mutations. Suggested fix: split processing from rendering and add smarter caching/invalidation.
-- Save filenames are sanitized conservatively, but there is still no user-facing preview of the final serialized names when a custom base filename is entered. Suggested fix: add a second live preview list that shows the exact final output names for the current textbox value.
+- Save collision checks are based on Firefox download history, not direct filesystem reads, so collisions outside history may still depend on Firefox’s own conflict handling.
 
----
-# Always Implement
-
-* update changelog.md with changes made.
-* keep agents.md outline updated with strucutural changes to the project.
-	* functionality of the project should be recorded in detail such that future AI changes do not destroy any existing functionality.
-
----
 # Agenda
 
 - still doesn't work on file:/// and i don't see any errors in the console logs. the path cells in log now shows the proper path, i.e. file:///d:... and the filter cells still show error.
+- display data: files? display svg?

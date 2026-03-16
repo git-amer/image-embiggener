@@ -258,10 +258,20 @@ button:hover {
 
 #ig-log-view th {
 	background: #102327;
-	cursor: pointer;
+	cursor: default;
 	position: sticky;
 	top: 0;
+	transition: text-shadow 0.15s ease, text-decoration-color 0.15s ease;
 	z-index: 1;
+}
+
+#ig-log-view th[data-column] {
+	cursor: pointer;
+}
+
+#ig-log-view th[data-column]:hover {
+	text-decoration: underline;
+	text-shadow: 0 0 2px #f2f2546e;
 }
 
 #ig-log-view tbody tr:nth-child(even) {
@@ -274,6 +284,58 @@ button:hover {
 
 #ig-log-view td[data-highlight-type] {
 	cursor: pointer;
+	transition: text-shadow 0.15s ease, text-decoration-color 0.15s ease;
+}
+
+#ig-log-view td[data-highlight-type]:hover,
+#ig-log-view .ig-log-thumb-clickable:hover {
+	text-decoration: underline;
+	text-shadow: 0 0 2px #f2f2546e;
+}
+
+#ig-log-view .ig-log-thumb-clickable {
+	cursor: pointer;
+	transition: text-shadow 0.15s ease, text-decoration-color 0.15s ease;
+}
+
+#ig-log-view td.thumbnail,
+#ig-log-view td.hidden,
+#ig-log-view td.filter {
+	text-align: center;
+}
+
+#ig-log-view td.thumbnail {
+	padding: 4px 6px;
+	vertical-align: middle;
+	width: 36px;
+}
+
+#ig-log-view .ig-log-thumb {
+	display: block;
+	height: 16px;
+	margin: 0 auto;
+	object-fit: contain;
+	width: 24px;
+}
+
+#ig-log-view .ig-log-thumb-missing {
+	color: #8aa8a0;
+}
+
+#ig-log-view .ig-log-hidden-toggle {
+	background: transparent;
+	border: 1px solid #777;
+	color: #000;
+	font-family: "Source Code Pro", monospace;
+	font-size: 12px;
+	font-weight: bold;
+	line-height: 1;
+	min-width: 20px;
+	padding: 2px 4px;
+}
+
+#ig-log-view .ig-log-hidden-toggle.selected {
+	color: #f00;
 }
 
 #ig-log-view td.filter.ok {
@@ -295,9 +357,14 @@ button:hover {
 	color: #ffd6d6;
 }
 
+#ig-log-view td.filter.forced-visible {
+	background: #8f8f8f;
+	color: #303030;
+}
+
 #ig-log-view td.filter.error {
-	background: rgba(214, 124, 95, 0.24);
-	color: #ffd9c8;
+	background: hsl(40, 10%, 90%);
+	color: #f00;
 	font-weight: bold;
 	text-align: center;
 }
@@ -314,6 +381,11 @@ button:hover {
 
 .ig-log-activator {
 	cursor: pointer;
+}
+
+.ig-hotkey {
+	text-decoration: underline;
+	text-underline-offset: 0.12em;
 }
 
 .ig-img-wrapper {

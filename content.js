@@ -12,7 +12,7 @@ if (!window.hasRunImageGallery) {
 	let scale = 1.0;
 	let translateX = 0;
 	let translateY = 0;
-	let removedImageUrls = new Set();
+	let manualVisibilityOverrides = new Map();
 	let currentlyHoveredImgWrapper = null;
 	let allImageData = [];
 	let allDiscoveredImages = [];
@@ -27,6 +27,10 @@ if (!window.hasRunImageGallery) {
 	let logHighlightState = null;
 	let activeSaveError = '';
 	let saveInputAutofillArmed = false;
+	let saveCollisionQueryKey = '';
+	let saveCollisionPaths = new Set();
+	let saveCollisionRequestId = 0;
+	let popupTemporaryShownRecord = null;
 	const originalGuessCache = new Map();
 	const PAGE_LOCK_STYLE_ID = 'ig-page-lock-style';
 
@@ -526,7 +530,9 @@ if (!window.hasRunImageGallery) {
 			blob: null,
 			objectUrl: '',
 			loadError: '',
+			defaultFilterReasons: [],
 			filterReasons: [],
+			defaultInGallery: false,
 			inGallery: false,
 			isDerivedOriginal: overrides.discoveryKind === 'derived'
 		};
@@ -794,7 +800,6 @@ if (!window.hasRunImageGallery) {
 	function getFilterReasons(record, compiledRegexes) {
 		const reasons = [];
 
-		if (removedImageUrls.has(record.discoveredSourceUrl)) reasons.push('removed');
 		if (compiledRegexes.includeRegex && !compiledRegexes.includeRegex.test(record.url)) reasons.push('include');
 		if (compiledRegexes.excludeRegex && compiledRegexes.excludeRegex.test(record.url)) reasons.push('exclude');
 		if (!record.loadError && record.width < settings.minWidth) reasons.push('width');
@@ -825,7 +830,26 @@ if (!window.hasRunImageGallery) {
 	}
 
 	function getLogFilterState(record, pageSourceUrls) {
+		if (record.loadError) {
+			return {
+				className: 'error',
+				sortValue: 'error',
+				text: 'error',
+				title: record.loadError,
+				highlightState: null
+			};
+		}
+
 		if (record.inGallery) {
+			if (record.defaultFilterReasons.length > 0) {
+				return {
+					className: 'forced-visible',
+					sortValue: record.defaultFilterReasons.join(', '),
+					text: escapeHtml(record.defaultFilterReasons.join(', ')),
+					title: '',
+					highlightState: null
+				};
+			}
 			if (getDerivedLogState(record, pageSourceUrls)) {
 				const sourceRecord = getRecordByKey(record.derivedFromRecordKey);
 				return {
@@ -861,16 +885,6 @@ if (!window.hasRunImageGallery) {
 					value: record.duplicateGroupKey,
 					sourceKey: `duplicate:${record.recordKey}`
 				} : null
-			};
-		}
-
-		if (record.loadError) {
-			return {
-				className: 'error',
-				sortValue: 'error',
-				text: 'error',
-				title: record.loadError,
-				highlightState: null
 			};
 		}
 
@@ -923,7 +937,9 @@ if (!window.hasRunImageGallery) {
 
 		orderedRecords.forEach((record, index) => {
 			record.alternateUrls = [record.url];
+			record.defaultFilterReasons = [];
 			record.filterReasons = [];
+			record.defaultInGallery = false;
 			record.inGallery = false;
 			record.galleryIndex = null;
 			record.logIndex = index + 1;
@@ -951,12 +967,12 @@ if (!window.hasRunImageGallery) {
 				reasons = reasons.filter((reason) => reason !== 'width' && reason !== 'height');
 				reasons.push('bigger exists');
 			}
-			record.filterReasons = reasons;
+			record.defaultFilterReasons = reasons;
 
-			if (!record.loadError && record.filterReasons.length === 0 && record.hash) {
+			if (!record.loadError && record.defaultFilterReasons.length === 0 && record.hash) {
 				const existingMaster = galleryHashMasters.get(record.hash);
 				if (existingMaster) {
-					record.filterReasons = ['duplicate'];
+					record.defaultFilterReasons = ['duplicate'];
 					record.duplicateGroupKey = record.hash;
 					existingMaster.alternateUrls.push(record.url);
 				} else {
@@ -964,7 +980,22 @@ if (!window.hasRunImageGallery) {
 				}
 			}
 
-			record.inGallery = !record.loadError && record.filterReasons.length === 0;
+			record.defaultInGallery = !record.loadError && record.defaultFilterReasons.length === 0;
+
+			const manualOverride = manualVisibilityOverrides.get(record.recordKey);
+			if (record.loadError) {
+				record.inGallery = false;
+				record.filterReasons = [...record.defaultFilterReasons];
+			} else if (manualOverride === 'hide') {
+				record.inGallery = false;
+				record.filterReasons = ['hidden'];
+			} else if (manualOverride === 'show') {
+				record.inGallery = true;
+				record.filterReasons = [...record.defaultFilterReasons];
+			} else {
+				record.inGallery = record.defaultInGallery;
+				record.filterReasons = [...record.defaultFilterReasons];
+			}
 			if (record.inGallery) galleryImages.push(record);
 		});
 
@@ -1170,6 +1201,22 @@ if (!window.hasRunImageGallery) {
 		};
 	}
 
+	function getRelativeSaveName(record, rawValue, index) {
+		const trimmed = String(rawValue || '').trim();
+		const useOriginalNames = trimmed === '' || /[\\/]\s*$/.test(trimmed);
+		const folderPrefix = useOriginalNames ? normalizeRelativePath(trimmed) : '';
+		const extension = record.extension || record.fileType || 'png';
+		if (useOriginalNames) {
+			return normalizeRelativePath([folderPrefix, getRecordFilenameWithExtension(record)].filter(Boolean).join('/'));
+		}
+		const basePath = normalizeRelativePath(trimmed);
+		const parts = basePath.split('/').filter(Boolean);
+		const baseName = sanitizePathSegment(parts.pop() || record.basename || 'image');
+		const directory = parts.join('/');
+		const serial = String(index + 1).padStart(3, '0');
+		return normalizeRelativePath([directory, `${baseName} ${serial}.${extension}`].filter(Boolean).join('/'));
+	}
+
 	function getOriginalSaveList() {
 		return allImageData.map((record) => getRecordFilenameWithExtension(record));
 	}
@@ -1179,24 +1226,57 @@ if (!window.hasRunImageGallery) {
 		return Boolean(backdrop && backdrop.style.display === 'flex');
 	}
 
+	async function refreshSaveCollisionState(plannedPaths, queryKey) {
+		const requestId = ++saveCollisionRequestId;
+		try {
+			const response = await browser.runtime.sendMessage({
+				action: 'checkSaveCollisions',
+				files: plannedPaths
+			});
+			if (requestId !== saveCollisionRequestId || saveCollisionQueryKey !== queryKey) return;
+			saveCollisionPaths = new Set(response?.collisions || []);
+		} catch (error) {
+			if (requestId !== saveCollisionRequestId || saveCollisionQueryKey !== queryKey) return;
+			saveCollisionPaths = new Set();
+		}
+		updateSaveDialogState();
+	}
+
 	function updateSaveDialogState() {
 		const { input, error, list, saveAllBtn, saveExploreBtn, saveViewBtn } = getSaveDialogElements();
 		if (!input || !error || !list) return;
 
+		const rawValue = input.value.trim();
 		const originalNames = getOriginalSaveList();
 		const counts = new Map();
 		originalNames.forEach((name) => counts.set(name, (counts.get(name) || 0) + 1));
 		const hasDuplicates = originalNames.some((name) => counts.get(name) > 1);
+		const plannedNames = allImageData.map((record, index) => getRelativeSaveName(record, rawValue, index));
+		const plannedCounts = new Map();
+		plannedNames.forEach((name) => plannedCounts.set(name, (plannedCounts.get(name) || 0) + 1));
+		const hasPlannedDuplicates = plannedNames.some((name) => plannedCounts.get(name) > 1);
+		const queryKey = plannedNames.join('\n');
+		if (saveCollisionQueryKey !== queryKey) {
+			saveCollisionQueryKey = queryKey;
+			saveCollisionPaths = new Set();
+			void refreshSaveCollisionState(plannedNames, queryKey);
+		}
+		const hasExistingCollisions = plannedNames.some((name) => saveCollisionPaths.has(name));
 
 		const firstImage = allImageData[0];
 		input.placeholder = firstImage ? (firstImage.basename || 'image') : '';
-		error.textContent = activeSaveError || '';
+		error.textContent = activeSaveError || (hasExistingCollisions ? 'Existing destination collisions are highlighted in red.' : '');
 
 		list.innerHTML = originalNames.length > 0
-			? originalNames.map((name) => `<li class="${counts.get(name) > 1 ? 'duplicate' : ''}">${escapeHtml(name)}</li>`).join('')
+			? originalNames.map((name, index) => {
+				const nextName = plannedNames[index] || '';
+				const duplicateClass = counts.get(name) > 1 || plannedCounts.get(nextName) > 1 || saveCollisionPaths.has(nextName) ? 'duplicate' : '';
+				const mapped = rawValue ? `${escapeHtml(name)} &rarr; ${escapeHtml(nextName)}` : escapeHtml(name);
+				return `<li class="${duplicateClass}">${mapped}</li>`;
+			}).join('')
 			: '<li class="empty">No images are currently in the gallery.</li>';
 
-		const disableSave = hasDuplicates || originalNames.length === 0;
+		const disableSave = hasDuplicates || hasPlannedDuplicates || hasExistingCollisions || originalNames.length === 0;
 		saveAllBtn.disabled = disableSave;
 		saveExploreBtn.disabled = disableSave;
 		saveViewBtn.disabled = disableSave;
@@ -1206,6 +1286,8 @@ if (!window.hasRunImageGallery) {
 		const { backdrop, input } = getSaveDialogElements();
 		if (!backdrop || !input) return;
 		activeSaveError = '';
+		saveCollisionQueryKey = '';
+		saveCollisionPaths = new Set();
 		saveInputAutofillArmed = true;
 		input.value = '';
 		updateSaveDialogState();
@@ -1219,6 +1301,8 @@ if (!window.hasRunImageGallery) {
 		if (!backdrop || !error) return;
 		backdrop.style.display = 'none';
 		activeSaveError = '';
+		saveCollisionQueryKey = '';
+		saveCollisionPaths = new Set();
 		error.textContent = '';
 		saveInputAutofillArmed = false;
 		syncHeaderToggleState();
@@ -1231,38 +1315,29 @@ if (!window.hasRunImageGallery) {
 		}
 
 		const rawValue = input.value.trim();
-		const useOriginalNames = rawValue === '' || /[\\/]\s*$/.test(rawValue);
-		const folderPrefix = useOriginalNames ? normalizeRelativePath(rawValue) : '';
 		const originalNames = getOriginalSaveList();
 		const duplicateNames = originalNames.filter((name, index) => originalNames.indexOf(name) !== index);
 		if (duplicateNames.length > 0) {
 			return { files: [], error: 'Duplicate original filenames must be resolved before saving.' };
 		}
 
-		const basePath = useOriginalNames ? '' : normalizeRelativePath(rawValue);
 		const files = allImageData.map((record, index) => {
 			if (!record.blob) {
 				throw new Error(`"${record.filename}" is not available to save.`);
 			}
-
-			const extension = record.extension || record.fileType || 'png';
-			let relativePath = '';
-
-			if (useOriginalNames) {
-				relativePath = normalizeRelativePath([folderPrefix, getRecordFilenameWithExtension(record)].filter(Boolean).join('/'));
-			} else {
-				const parts = basePath.split('/').filter(Boolean);
-				const baseName = sanitizePathSegment(parts.pop() || record.basename || 'image');
-				const directory = parts.join('/');
-				const serial = String(index + 1).padStart(3, '0');
-				relativePath = normalizeRelativePath([directory, `${baseName} ${serial}.${extension}`].filter(Boolean).join('/'));
-			}
+			const relativePath = getRelativeSaveName(record, rawValue, index);
 
 			return {
 				relativePath,
 				blob: record.blob
 			};
 		});
+		const plannedCounts = new Map();
+		files.forEach((file) => plannedCounts.set(file.relativePath, (plannedCounts.get(file.relativePath) || 0) + 1));
+		const duplicatePlannedPaths = [...plannedCounts.entries()].filter((entry) => entry[1] > 1).map((entry) => entry[0]);
+		if (duplicatePlannedPaths.length > 0) {
+			return { files: [], error: `Duplicate destination filenames must be resolved before saving: ${duplicatePlannedPaths.join(', ')}` };
+		}
 
 		return { files, error: '' };
 	}
@@ -1329,6 +1404,7 @@ if (!window.hasRunImageGallery) {
 
 	function getLogSortValue(record, column, pageSourceUrls) {
 		if (column === 'galleryIndex') return record.logIndex || Number.MAX_SAFE_INTEGER;
+		if (column === 'hidden') return record.inGallery ? 0 : 1;
 		if (column === 'path') return record.path || '';
 		if (column === 'filename') return record.filename || '';
 		if (column === 'fileType') return record.fileType || '';
@@ -1343,8 +1419,7 @@ if (!window.hasRunImageGallery) {
 
 		const logBody = galleryHost.shadowRoot.getElementById('ig-log-body');
 		const logButton = galleryHost.shadowRoot.getElementById('logBtn');
-		const resetRemovedBtn = galleryHost.shadowRoot.getElementById('resetRemovedBtn');
-		if (!logBody || !logButton || !resetRemovedBtn) return;
+		if (!logBody || !logButton) return;
 		const pageSourceUrls = new Set(allDiscoveredImages.filter((record) => record.discoveryKind === 'page').map((record) => record.sourceUrl));
 
 		const rows = [...allDiscoveredImages].sort((a, b) => {
@@ -1372,19 +1447,27 @@ if (!window.hasRunImageGallery) {
 			const widthHighlightClass = isLogCellHighlighted(record, 'width') ? ' ig-log-highlighted' : '';
 			const heightHighlightClass = isLogCellHighlighted(record, 'height') ? ' ig-log-highlighted' : '';
 			const filterActiveClass = isLogFilterCellActive(record, filterState) ? ' ig-log-cell-active' : '';
+			const hiddenSelectedClass = record.inGallery ? '' : ' selected';
+			const hiddenDisabledAttr = record.loadError ? ' disabled' : '';
+			const hiddenTitle = record.inGallery ? 'Hide this image from the gallery' : 'Show this image in the gallery';
+			const thumbSrc = record.objectUrl || record.url;
+			const thumbCell = record.loadError
+				? '<span class="ig-log-thumb-missing">-</span>'
+				: `<img class="ig-log-thumb ig-log-thumb-clickable" src="${escapeHtml(thumbSrc)}" alt="" title="Open image">`;
 			return `
 				<tr data-record-key="${escapeHtml(record.recordKey)}">
 					<td class="numeric">${galleryIndex}</td>
+					<td class="thumbnail">${thumbCell}</td>
 					<td class="ig-log-matchable${pathHighlightClass}" data-highlight-type="path" data-highlight-value="${escapeHtml(record.path || '')}">${escapeHtml(record.path || '')}</td>
 					<td class="ig-log-matchable${filenameHighlightClass}" data-highlight-type="filenameStem" data-highlight-value="${escapeHtml(getFilenameStem(record))}">${escapeHtml(record.filename || '')}</td>
 					<td class="ig-log-matchable${typeHighlightClass}" data-highlight-type="fileType" data-highlight-value="${escapeHtml(record.fileType || '')}">${escapeHtml(record.fileType || '')}</td>
 					<td class="numeric ig-log-matchable${widthHighlightClass}" data-highlight-type="width" data-highlight-value="${escapeHtml(String(record.width || ''))}">${record.width || ''}</td>
 					<td class="numeric ig-log-matchable${heightHighlightClass}" data-highlight-type="height" data-highlight-value="${escapeHtml(String(record.height || ''))}">${record.height || ''}</td>
+					<td class="hidden"><button class="ig-log-hidden-toggle${hiddenSelectedClass}" data-action="toggle-hidden"${hiddenDisabledAttr} title="${hiddenTitle}">X</button></td>
 					<td class="filter ${filterState.className}${filterActiveClass}"${filterTitle}${filterState.highlightState ? ` data-highlight-type="${escapeHtml(filterState.highlightState.type)}" data-highlight-value="${escapeHtml(filterState.highlightState.value)}" data-highlight-source="${escapeHtml(filterState.highlightState.sourceKey)}"` : ''}>${filterState.text}</td>
 				</tr>
 			`;
 		}).join('');
-		resetRemovedBtn.disabled = removedImageUrls.size === 0;
 	}
 
 	function getDefaultProfileFallback() {
@@ -1434,6 +1517,55 @@ if (!window.hasRunImageGallery) {
 		if (mode === 'gallery') updateGridStyle();
 		if (mode === 'log') renderLogTable();
 		syncHeaderToggleState();
+	}
+
+	async function applyManualHiddenState(recordKey, shouldHide) {
+		const record = getRecordByKey(recordKey);
+		if (!record || record.loadError) return;
+		if (shouldHide) {
+			manualVisibilityOverrides.set(recordKey, 'hide');
+		} else if (record.defaultInGallery) {
+			manualVisibilityOverrides.delete(recordKey);
+		} else {
+			manualVisibilityOverrides.set(recordKey, 'show');
+		}
+		const gridContainer = galleryHost?.shadowRoot?.querySelector('.ig-grid-container');
+		if (gridContainer) await filterAndDisplayImages(allScrapedUrls, gridContainer);
+	}
+
+	async function openPopupFromLogRecord(recordKey) {
+		const record = getRecordByKey(recordKey);
+		if (!record || record.loadError) return;
+
+		const previousOverride = manualVisibilityOverrides.has(recordKey) ? manualVisibilityOverrides.get(recordKey) : undefined;
+		if (!record.inGallery) {
+			popupTemporaryShownRecord = { recordKey, previousOverride };
+			manualVisibilityOverrides.set(recordKey, 'show');
+			const gridContainer = galleryHost?.shadowRoot?.querySelector('.ig-grid-container');
+			if (gridContainer) await filterAndDisplayImages(allScrapedUrls, gridContainer);
+		}
+
+		const galleryIndex = allImageData.findIndex((item) => item.recordKey === recordKey);
+		if (galleryIndex >= 0) showImagePopup(galleryIndex);
+	}
+
+	async function closePopupAndRestoreTemporaryShownRecord() {
+		if (popup) {
+			popup.style.display = 'none';
+			popup.classList.remove('ig-popup-chrome-hidden');
+		}
+		if (popupTemporaryShownRecord) {
+			const { recordKey, previousOverride } = popupTemporaryShownRecord;
+			if (previousOverride === undefined) {
+				manualVisibilityOverrides.delete(recordKey);
+			} else {
+				manualVisibilityOverrides.set(recordKey, previousOverride);
+			}
+			popupTemporaryShownRecord = null;
+			const gridContainer = galleryHost?.shadowRoot?.querySelector('.ig-grid-container');
+			if (gridContainer) await filterAndDisplayImages(allScrapedUrls, gridContainer);
+			if (currentViewMode === 'log') setMainViewMode('log');
+		}
 	}
 
 	function updatePopupChromeVisibility(clientX, clientY) {
@@ -1634,7 +1766,13 @@ if (!window.hasRunImageGallery) {
 		applyTransform();
 	};
 
-	function handleGlobalKeyDown(e) {
+	async function handleGlobalKeyDown(e) {
+		const shadow = galleryHost?.shadowRoot;
+		const activeElement = shadow?.activeElement || document.activeElement;
+		const editingText = Boolean(activeElement && (activeElement.isContentEditable || activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA'));
+		const key = String(e.key || '');
+		const lowerKey = key.toLowerCase();
+
 		if (e.key === 'Escape') {
 			e.preventDefault();
 			const host = document.getElementById(GALLERY_HOST_ID);
@@ -1646,8 +1784,7 @@ if (!window.hasRunImageGallery) {
 			if (saveDialog && saveDialog.style.display === 'flex') {
 				closeSaveDialog();
 			} else if (popup && popup.style.display === 'flex') {
-				popup.style.display = 'none';
-				popup.classList.remove('ig-popup-chrome-hidden');
+				await closePopupAndRestoreTemporaryShownRecord();
 			} else if (currentViewMode === 'log') {
 				setMainViewMode('gallery');
 			} else {
@@ -1658,11 +1795,35 @@ if (!window.hasRunImageGallery) {
 				e.preventDefault();
 				const hoveredRecord = allImageData.find((record) => record.element === currentlyHoveredImgWrapper);
 				if (hoveredRecord) {
-					removedImageUrls.add(hoveredRecord.discoveredSourceUrl);
+					manualVisibilityOverrides.set(hoveredRecord.recordKey, 'hide');
 					currentlyHoveredImgWrapper = null; // Clear reference
 					const gridContainer = galleryHost?.shadowRoot?.querySelector('.ig-grid-container');
-					if (gridContainer) filterAndDisplayImages(allScrapedUrls, gridContainer);
+					if (gridContainer) await filterAndDisplayImages(allScrapedUrls, gridContainer);
 				}
+			}
+		} else if (!editingText && !e.ctrlKey && !e.metaKey && !e.altKey) {
+			const popupOpen = shadow?.getElementById('ig-img-popup')?.style.display === 'flex';
+			if (popupOpen) return;
+			if (lowerKey === 'l') {
+				e.preventDefault();
+				setMainViewMode(currentViewMode === 'log' ? 'gallery' : 'log');
+			} else if (lowerKey === 'o') {
+				e.preventDefault();
+				browser.runtime.sendMessage({ action: 'openOptionsPage' });
+			} else if (lowerKey === 's') {
+				e.preventDefault();
+				if (isSaveDialogOpen()) {
+					closeSaveDialog();
+				} else {
+					openSaveDialog();
+				}
+			} else if (lowerKey === 'd') {
+				e.preventDefault();
+				const deriveBtn = shadow?.getElementById('deriveBtn');
+				if (!deriveBtn) return;
+				deriveBtn.classList.toggle('ig-toggle-active');
+				const controls = shadow?.querySelector('.ig-controls');
+				controls?.dispatchEvent(new Event('input', { bubbles: true }));
 			}
 		}
 	}
@@ -1982,15 +2143,20 @@ if (!window.hasRunImageGallery) {
 		shadow.getElementById('logBtn').addEventListener('click', () => {
 			setMainViewMode(currentViewMode === 'log' ? 'gallery' : 'log');
 		});
+		const markProfileDirty = (dirty = true) => {
+			const profileNameEl = shadow.getElementById('profileNameDisplay');
+			const profileSaveBtn = shadow.getElementById('profileSaveBtn');
+			const trimmedName = profileNameEl.textContent.trim();
+			const canSave = dirty && trimmedName !== '' && trimmedName !== 'no profile';
+			profileSaveBtn.disabled = !canSave;
+			profileSaveBtn.classList.toggle('ig-unsaved', canSave);
+		};
+
 		shadow.getElementById('deriveBtn').addEventListener('click', () => {
 			const deriveBtn = shadow.getElementById('deriveBtn');
 			deriveBtn.classList.toggle('ig-toggle-active');
 			markProfileDirty(true);
 			updateGridFilter();
-		});
-		shadow.getElementById('resetRemovedBtn').addEventListener('click', () => {
-			removedImageUrls.clear();
-			filterAndDisplayImages(allScrapedUrls, gridContainer);
 		});
 		shadow.getElementById('optionsBtn').addEventListener('click', () => {
 			browser.runtime.sendMessage({ action: 'openOptionsPage' });
@@ -2034,6 +2200,24 @@ if (!window.hasRunImageGallery) {
 			});
 		});
 		shadow.getElementById('ig-log-view').addEventListener('click', (e) => {
+			const row = e.target.closest('tr[data-record-key]');
+			const recordKey = row?.dataset.recordKey || '';
+			if (!recordKey) return;
+
+			const hiddenToggle = e.target.closest('button[data-action="toggle-hidden"]');
+			if (hiddenToggle) {
+				const record = getRecordByKey(recordKey);
+				if (!record) return;
+				applyManualHiddenState(recordKey, record.inGallery);
+				return;
+			}
+
+			const thumb = e.target.closest('.ig-log-thumb-clickable');
+			if (thumb) {
+				openPopupFromLogRecord(recordKey);
+				return;
+			}
+
 			const cell = e.target.closest('td[data-highlight-type]');
 			if (!cell) return;
 			const type = cell.dataset.highlightType;
@@ -2115,13 +2299,6 @@ if (!window.hasRunImageGallery) {
 		const profileSaveBtn = shadow.getElementById('profileSaveBtn');
 
 		// --- Profile Management Logic ---
-
-		const markProfileDirty = (dirty = true) => {
-			const trimmedName = profileNameEl.textContent.trim();
-			const canSave = dirty && trimmedName !== '' && trimmedName !== 'no profile';
-			profileSaveBtn.disabled = !canSave;
-			profileSaveBtn.classList.toggle('ig-unsaved', canSave);
-		};
 
 		// Add listeners to all controls to enable saving on change
 		const controlInputs = shadow.querySelectorAll('.ig-container > .ig-controls input, .ig-container > .ig-controls select');
@@ -2396,10 +2573,8 @@ if (!window.hasRunImageGallery) {
 		window.removeEventListener('keydown', handleGlobalKeyDown);
 		if (galleryHost) {
 			closeSaveDialog();
-			if (popup) {
-				popup.style.display = 'none';
-				popup.classList.remove('ig-popup-chrome-hidden');
-			}
+			void closePopupAndRestoreTemporaryShownRecord();
+			setMainViewMode('gallery');
 			galleryHost.style.display = 'none'; // Hide instead of removing
 			document.querySelectorAll('.amer-image-gallery-hide').forEach(item => {
 				item.classList.remove('amer-image-gallery-hide');
@@ -2528,11 +2703,10 @@ if (!window.hasRunImageGallery) {
 					</label>
 					<label>Include: <input type="text" id="includeRegex" value="${currentSettings.includeRegex || ''}"></label>
 					<label>Exclude: <input type="text" id="excludeRegex" value="${currentSettings.excludeRegex || ''}"></label>
-					<button id="deriveBtn" class="${currentSettings.deriveOriginals !== false ? 'ig-toggle-active' : ''}" title="Attempt to discover larger files based on filename.">Derive</button>
-					<button id="resetRemovedBtn" disabled>Unhide</button>
-					<button id="saveImagesBtn" title="Save Images">Save Images</button>
-					<button id="logBtn">Log</button>
-					<button id="optionsBtn">Options</button>
+					<button id="deriveBtn" class="${currentSettings.deriveOriginals !== false ? 'ig-toggle-active' : ''}" title="Attempt to discover larger files based on filename."><span class="ig-hotkey">D</span>erive</button>
+					<button id="saveImagesBtn" title="Save Images"><span class="ig-hotkey">S</span>ave Images</button>
+					<button id="logBtn"><span class="ig-hotkey">L</span>og</button>
+					<button id="optionsBtn"><span class="ig-hotkey">O</span>ptions</button>
 					<button id="closeBtn" title="Close Gallery (Esc)">&#x2715;</button>
 				</div>
 				<div class="ig-grid-container"></div>
@@ -2541,11 +2715,13 @@ if (!window.hasRunImageGallery) {
 						<thead>
 							<tr>
 								<th data-column="galleryIndex">#</th>
+								<th>Thumb</th>
 								<th data-column="path">Path</th>
 								<th data-column="filename">Filename</th>
 								<th data-column="fileType">Type</th>
 								<th data-column="width">Width</th>
 								<th data-column="height">Height</th>
+								<th data-column="hidden">Hidden</th>
 								<th data-column="filter">Filter</th>
 							</tr>
 						</thead>
