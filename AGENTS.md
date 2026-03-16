@@ -264,3 +264,5 @@ This file is the extension design reference. Update it whenever functionality, b
 
 ---
 # Agenda
+
+- still doesn't work on file:/// and i don't see any errors in the console logs. the path cells in log now shows the proper path, i.e. file:///d:... and the filter cells still show error.
